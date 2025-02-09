@@ -1,0 +1,8 @@
+[package]
+name = "openssl-assignment-1"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+openssl-sys = "0.9.105"
+openssl = "0.10.70"
