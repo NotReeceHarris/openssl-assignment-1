@@ -1,4 +1,6 @@
+use openssl::rsa::{Rsa, Padding};
 use openssl::symm::{encrypt, decrypt, Cipher};
+use rand::Rng;
 use std::fs;
 use std::io;
 
@@ -8,30 +10,44 @@ fn main() -> io::Result<()> {
     let encrypted_file = "message.enc";
     let decrypted_file = "decrypted_letter.txt";
 
-    // Password (in a real scenario, this should be securely handled)
-    let password = "i didnt want to use virtual box, so i did it my own way :)";
+    // Generate RSA key pair (in a real scenario, these would be securely stored)
+    let rsa = Rsa::generate(2048).unwrap();
+    let private_key = rsa.private_key_to_pem().unwrap();
+    let public_key = rsa.public_key_to_pem().unwrap();
 
-    // Encrypt the file
-    encrypt_file(input_file, encrypted_file, password)?;
+    // Generate a random symmetric key and IV for AES-256-CBC
+    let (aes_key, aes_iv) = generate_aes_key_and_iv();
+
+    // Encrypt the file using the symmetric key
+    encrypt_file(input_file, encrypted_file, &aes_key, &aes_iv)?;
     println!("File encrypted successfully: {}", encrypted_file);
 
-    // Decrypt the file
-    decrypt_file(encrypted_file, decrypted_file, password)?;
+    // Encrypt the symmetric key using the public key
+    let encrypted_aes_key = encrypt_aes_key_with_rsa(&aes_key, &public_key).unwrap();
+    let encrypted_aes_iv = encrypt_aes_key_with_rsa(&aes_iv, &public_key).unwrap();
+
+    // Save the encrypted symmetric key and IV to a file (for demonstration purposes)
+    fs::write("encrypted_aes_key.bin", &encrypted_aes_key)?;
+    fs::write("encrypted_aes_iv.bin", &encrypted_aes_iv)?;
+
+    // Decrypt the symmetric key using the private key
+    let decrypted_aes_key = decrypt_aes_key_with_rsa(&encrypted_aes_key, &private_key).unwrap();
+    let decrypted_aes_iv = decrypt_aes_key_with_rsa(&encrypted_aes_iv, &private_key).unwrap();
+
+    // Decrypt the file using the symmetric key
+    decrypt_file(encrypted_file, decrypted_file, &decrypted_aes_key, &decrypted_aes_iv)?;
     println!("File decrypted successfully: {}", decrypted_file);
 
     Ok(())
 }
 
-fn encrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
+fn encrypt_file(input_path: &str, output_path: &str, key: &[u8], iv: &[u8]) -> io::Result<()> {
     // Read the input file
     let data = fs::read(input_path)?;
 
-    // Generate a key and IV from the password using a simple key derivation function
-    let (key, iv) = derive_key_and_iv(password);
-
     // Encrypt the data using AES-256-CBC
     let cipher = Cipher::aes_256_cbc();
-    let encrypted_data = encrypt(cipher, &key, Some(&iv), &data).unwrap();
+    let encrypted_data = encrypt(cipher, key, Some(iv), &data).unwrap();
 
     // Write the encrypted data to the output file
     fs::write(output_path, encrypted_data)?;
@@ -39,16 +55,13 @@ fn encrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Resu
     Ok(())
 }
 
-fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Result<()> {
+fn decrypt_file(input_path: &str, output_path: &str, key: &[u8], iv: &[u8]) -> io::Result<()> {
     // Read the encrypted file
     let encrypted_data = fs::read(input_path)?;
 
-    // Generate a key and IV from the password using the same key derivation function
-    let (key, iv) = derive_key_and_iv(password);
-
     // Decrypt the data using AES-256-CBC
     let cipher = Cipher::aes_256_cbc();
-    let decrypted_data = decrypt(cipher, &key, Some(&iv), &encrypted_data).unwrap();
+    let decrypted_data = decrypt(cipher, key, Some(iv), &encrypted_data).unwrap();
 
     // Write the decrypted data to the output file
     fs::write(output_path, decrypted_data)?;
@@ -56,15 +69,27 @@ fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> io::Resu
     Ok(())
 }
 
-fn derive_key_and_iv(password: &str) -> (Vec<u8>, Vec<u8>) {
-    // In a real scenario, use a proper key derivation function like PBKDF2 or scrypt
-    // For simplicity, we'll just pad the password to 32 bytes (256 bits) for the key
-    // and 16 bytes (128 bits) for the IV.
-    let mut key = password.as_bytes().to_vec();
-    key.resize(32, 0); // Pad to 32 bytes (256 bits)
+fn generate_aes_key_and_iv() -> (Vec<u8>, Vec<u8>) {
+    let mut rng = rand::thread_rng();
+    let aes_key: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+    let aes_iv: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
+    (aes_key, aes_iv)
+}
 
-    let mut iv = password.as_bytes().to_vec();
-    iv.resize(16, 0); // Pad to 16 bytes (128 bits)
+fn encrypt_aes_key_with_rsa(data: &[u8], public_key: &[u8]) -> Result<Vec<u8>, openssl::error::ErrorStack> {
+    let rsa = Rsa::public_key_from_pem(public_key)?;
+    let mut encrypted_data = vec![0; rsa.size() as usize];
+    let encrypted_len = rsa.public_encrypt(data, &mut encrypted_data, Padding::PKCS1)?;
+    encrypted_data.truncate(encrypted_len);
 
-    (key, iv)
+    Ok(encrypted_data)
+}
+
+fn decrypt_aes_key_with_rsa(data: &[u8], private_key: &[u8]) -> Result<Vec<u8>, openssl::error::ErrorStack> {
+    let rsa = Rsa::private_key_from_pem(private_key)?;
+    let mut decrypted_data = vec![0; rsa.size() as usize];
+    let decrypted_len = rsa.private_decrypt(data, &mut decrypted_data, Padding::PKCS1)?;
+    decrypted_data.truncate(decrypted_len);
+
+    Ok(decrypted_data)
 }
